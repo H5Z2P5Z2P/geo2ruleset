@@ -2,7 +2,7 @@
 
 Geosite Ruleset Converter for Surge - Go 实现
 
-本项目重写自 https://github.com/xxxbrian/Surge-Geosite/，感谢原作者的开源贡献。
+本项目重写自 https://github.com/xxxbrian/Surge-Geosite , 感谢原作者的开源贡献。
 
 ## 功能
 
