@@ -2,11 +2,15 @@
 package converter
 
 import (
+	"regexp"
 	"strconv"
 	"strings"
 
 	"github.com/xxxbrian/surge-geosite/internal/wildcard"
 )
+
+// skipPattern matches patterns that result in only wildcards
+var skipPattern = regexp.MustCompile(`^[\?\*]+$`)
 
 // RenderSurge renders parsed items into Surge ruleset format.
 func RenderSurge(items []Item) string {

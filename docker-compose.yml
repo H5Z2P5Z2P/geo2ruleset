@@ -1,11 +1,15 @@
-version: "3.8"
-
 services:
   surge-geosite:
     build:
       context: .
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
+    environment:
+      GEO_PORT: "8080"
+      GEO_INDEX_PATH: "/data/index.json"
+      GEO_BASE_URL: "http://127.0.0.1:8080"
+      GEO_REPO_URL: "https://github.com/xxxbrian/Surge-Geosite"
+      GEO_MISC_BASE_URL: "https://raw.githubusercontent.com/xxxbrian/Surge-Geosite/refs/heads/main/misc"
     volumes:
       - ./data:/data
     restart: unless-stopped

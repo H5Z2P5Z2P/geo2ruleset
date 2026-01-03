@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/xxxbrian/surge-geosite/internal/cache"
@@ -16,7 +17,11 @@ import (
 
 func main() {
 	// Parse command-line flags
-	port := flag.String("port", "8080", "Port to listen on")
+	port := flag.String("port", envOrDefault("GEO_PORT", "8080"), "Port to listen on")
+	baseURL := flag.String("base-url", envOrDefault("GEO_BASE_URL", ""), "Base URL for generated index (optional)")
+	indexPath := flag.String("index-path", envOrDefault("GEO_INDEX_PATH", ""), "Local index.json file path (optional)")
+	repoURL := flag.String("repo-url", envOrDefault("GEO_REPO_URL", "https://github.com/xxxbrian/Surge-Geosite"), "Repository URL for root redirect")
+	miscBaseURL := flag.String("misc-base-url", envOrDefault("GEO_MISC_BASE_URL", "https://raw.githubusercontent.com/xxxbrian/Surge-Geosite/refs/heads/main/misc"), "Base URL for misc lists")
 	zipTTL := flag.Duration("zip-ttl", 30*time.Minute, "ZIP cache TTL")
 	resultTTL := flag.Duration("result-ttl", 24*time.Hour, "Result cache TTL")
 	zipCachePath := flag.String("zip-cache-path", "", "ZIP cache persistence file path (optional)")
@@ -41,7 +46,15 @@ func main() {
 	f := fetcher.NewFetcher(zipCache)
 
 	// Initialize server
-	srv := server.NewServer(f, resultCache)
+	srv := server.NewServer(f, resultCache, server.Config{
+		IndexPath:   *indexPath,
+		BaseURL:     *baseURL,
+		RepoURL:     *repoURL,
+		MiscBaseURL: *miscBaseURL,
+	})
+	if err := srv.RefreshIndex(); err != nil {
+		log.Printf("Index refresh failed: %v", err)
+	}
 
 	// Setup routes
 	mux := http.NewServeMux()
@@ -72,6 +85,9 @@ func main() {
 				if afterETag != "" && afterETag != beforeETag {
 					log.Printf("ZIP cache refreshed (etag %s)", afterETag)
 				}
+				if err := srv.RefreshIndex(); err != nil {
+					log.Printf("Index refresh failed: %v", err)
+				}
 			}
 			refresh()
 			ticker := time.NewTicker(*refreshInterval)
@@ -86,6 +102,12 @@ func main() {
 	addr := ":" + *port
 	log.Printf("Starting Surge-Geosite server on %s", addr)
 	log.Printf("ZIP cache TTL: %v, Result cache TTL: %v", *zipTTL, *resultTTL)
+	if *indexPath != "" {
+		log.Printf("Index path: %s", *indexPath)
+	}
+	if *baseURL != "" {
+		log.Printf("Base URL: %s", *baseURL)
+	}
 	if *zipCachePath != "" {
 		log.Printf("ZIP cache persistence: %s", *zipCachePath)
 	}
@@ -96,4 +118,12 @@ func main() {
 	if err := http.ListenAndServe(addr, handler); err != nil {
 		log.Fatalf("Server failed: %v", err)
 	}
+}
+
+func envOrDefault(key string, def string) string {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return def
+	}
+	return value
 }

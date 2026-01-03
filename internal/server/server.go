@@ -2,12 +2,17 @@
 package server
 
 import (
+	"archive/zip"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/xxxbrian/surge-geosite/internal/cache"
@@ -20,22 +25,35 @@ type Server struct {
 	fetcher     *fetcher.Fetcher
 	resultCache *cache.ResultCache
 	httpClient  *http.Client
-	indexURL    string
+	indexPath   string
+	baseURL     string
 	repoURL     string
 	miscBaseURL string
+	indexMu     sync.RWMutex
+	indexETag   string
+	indexBody   []byte
+}
+
+// Config contains server configuration.
+type Config struct {
+	IndexPath   string
+	BaseURL     string
+	RepoURL     string
+	MiscBaseURL string
 }
 
 // NewServer creates a new Server
-func NewServer(f *fetcher.Fetcher, rc *cache.ResultCache) *Server {
+func NewServer(f *fetcher.Fetcher, rc *cache.ResultCache, cfg Config) *Server {
 	return &Server{
 		fetcher:     f,
 		resultCache: rc,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
-		indexURL:    "https://raw.githubusercontent.com/xxxbrian/Surge-Geosite/main/index.json",
-		repoURL:     "https://github.com/xxxbrian/Surge-Geosite",
-		miscBaseURL: "https://raw.githubusercontent.com/xxxbrian/Surge-Geosite/refs/heads/main/misc",
+		indexPath:   strings.TrimSpace(cfg.IndexPath),
+		baseURL:     strings.TrimSuffix(strings.TrimSpace(cfg.BaseURL), "/"),
+		repoURL:     cfg.RepoURL,
+		miscBaseURL: cfg.MiscBaseURL,
 	}
 }
 
@@ -64,27 +82,28 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 
 // handleGeositeIndex returns the JSON index of available geosites
 func (s *Server) handleGeositeIndex(w http.ResponseWriter, r *http.Request) {
-	resp, err := s.httpClient.Get(s.indexURL)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to fetch index: %v", err), http.StatusInternalServerError)
-		return
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		http.Error(w, fmt.Sprintf("Failed to fetch index: %s", resp.Status), http.StatusInternalServerError)
-		return
+	// Priority 1: Read from indexPath file if exists
+	if s.indexPath != "" {
+		if body, err := os.ReadFile(s.indexPath); err == nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Cache-Control", "public, max-age=1800")
+			_, _ = w.Write(body)
+			return
+		}
 	}
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to read response: %v", err), http.StatusInternalServerError)
+	// Priority 2: Use cached index
+	if body, ok := s.getCachedIndex(); ok {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "public, max-age=1800")
+		_, _ = w.Write(body)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "public, max-age=1800")
-	w.Write(body)
+	// Priority 3: Generate dynamically from request
+	if err := s.writeIndexFromZip(w, r); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to generate index: %v", err), http.StatusInternalServerError)
+	}
 }
 
 // handleGeosite handles /geosite/:name_with_filter requests
@@ -240,3 +259,165 @@ func truncateETag(etag string) string {
 
 // Compile-time check to ensure json is used (for index parsing)
 var _ = json.Marshal
+
+// RefreshIndex regenerates the index and saves to indexPath if configured.
+// Called at startup and when ZIP is refreshed.
+func (s *Server) RefreshIndex() error {
+	if s.baseURL == "" {
+		return nil
+	}
+
+	zipReader, etag, err := s.fetcher.GetZipReader()
+	if err != nil {
+		return err
+	}
+
+	// Check if we already have this version cached
+	s.indexMu.RLock()
+	currentETag := s.indexETag
+	s.indexMu.RUnlock()
+	if currentETag == etag && s.indexPath != "" {
+		// Check if file exists
+		if _, err := os.Stat(s.indexPath); err == nil {
+			return nil
+		}
+	}
+
+	// Build index with correct URL format: baseURL + /geosite/ + name
+	body, err := s.buildIndexFromZip(zipReader, s.baseURL+"/geosite")
+	if err != nil {
+		return err
+	}
+
+	// Update in-memory cache
+	s.setCachedIndex(etag, body)
+
+	// Save to file if indexPath is configured
+	if s.indexPath != "" {
+		if err := s.saveIndexToFile(body); err != nil {
+			log.Printf("Failed to save index to %s: %v", s.indexPath, err)
+			return err
+		}
+		log.Printf("Index saved to %s", s.indexPath)
+	}
+
+	return nil
+}
+
+func (s *Server) writeIndexFromZip(w http.ResponseWriter, r *http.Request) error {
+	zipReader, etag, err := s.fetcher.GetZipReader()
+	if err != nil {
+		return err
+	}
+
+	baseURL := buildBaseURL(r)
+
+	// Check memory cache
+	s.indexMu.RLock()
+	if s.indexBody != nil && s.indexETag == etag {
+		body := s.indexBody
+		s.indexMu.RUnlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "public, max-age=1800")
+		_, _ = w.Write(body)
+		return nil
+	}
+	s.indexMu.RUnlock()
+
+	body, err := s.buildIndexFromZip(zipReader, baseURL)
+	if err != nil {
+		return err
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "public, max-age=1800")
+	_, _ = w.Write(body)
+	return nil
+}
+
+func buildBaseURL(r *http.Request) string {
+	host := r.Header.Get("X-Forwarded-Host")
+	if host == "" {
+		host = r.Host
+	}
+	proto := r.Header.Get("X-Forwarded-Proto")
+	if proto == "" {
+		if r.TLS != nil {
+			proto = "https"
+		} else {
+			proto = "http"
+		}
+	}
+	return proto + "://" + host + "/geosite"
+}
+
+func (s *Server) buildIndexFromZip(zipReader *zip.Reader, geositeBaseURL string) ([]byte, error) {
+	const dataPrefix = "domain-list-community-master/data/"
+	index := make(map[string]string)
+
+	for _, file := range zipReader.File {
+		if !strings.HasPrefix(file.Name, dataPrefix) {
+			continue
+		}
+		name := strings.TrimPrefix(file.Name, dataPrefix)
+		if name == "" {
+			continue
+		}
+		if strings.Contains(name, "/") {
+			continue
+		}
+		// geositeBaseURL is already like "http://example.com/geosite"
+		index[name] = strings.TrimRight(geositeBaseURL, "/") + "/" + name
+	}
+
+	ordered := make([]string, 0, len(index))
+	for name := range index {
+		ordered = append(ordered, name)
+	}
+	sort.Strings(ordered)
+
+	orderedIndex := make(map[string]string, len(index))
+	for _, name := range ordered {
+		orderedIndex[name] = index[name]
+	}
+
+	return json.MarshalIndent(orderedIndex, "", "  ")
+}
+
+func (s *Server) getCachedIndex() ([]byte, bool) {
+	s.indexMu.RLock()
+	defer s.indexMu.RUnlock()
+
+	if s.indexBody == nil {
+		return nil, false
+	}
+	return s.indexBody, true
+}
+
+func (s *Server) setCachedIndex(etag string, body []byte) {
+	s.indexMu.Lock()
+	defer s.indexMu.Unlock()
+
+	s.indexETag = etag
+	s.indexBody = body
+}
+
+func (s *Server) saveIndexToFile(body []byte) error {
+	if s.indexPath == "" {
+		return nil
+	}
+
+	// Create directory if needed
+	dir := filepath.Dir(s.indexPath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+
+	// Write to temp file first, then rename for atomicity
+	tmpPath := s.indexPath + ".tmp"
+	if err := os.WriteFile(tmpPath, body, 0644); err != nil {
+		return err
+	}
+
+	return os.Rename(tmpPath, s.indexPath)
+}

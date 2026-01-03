@@ -28,6 +28,15 @@ go build -o surge-geosite
 
 # 启用 ZIP 磁盘缓存与定时刷新
 ./surge-geosite -zip-cache-path ./data/zip-cache.gob -zip-refresh-interval 30m
+
+# 使用本地 index.json（优先于自动生成）
+./surge-geosite -index-path ./data/index.json
+
+# 预生成 index.json 使用固定 Base URL
+./surge-geosite -base-url https://example.com
+
+# 使用自动生成的 index.json（默认）
+./surge-geosite
 ```
 
 ## API 端点
@@ -64,6 +73,16 @@ curl http://localhost:8080/misc/wechat/wechat
 ```bash
 docker compose up -d --build
 ```
+
+## 环境变量
+
+| 变量 | 说明 |
+|------|------|
+| `GEO_PORT` | 监听端口（默认 `8080`） |
+| `GEO_INDEX_PATH` | 本地 index.json 路径（优先于 URL） |
+| `GEO_BASE_URL` | 预生成 index.json 的 Base URL |
+| `GEO_REPO_URL` | 根路径跳转的仓库 URL |
+| `GEO_MISC_BASE_URL` | misc 列表基础 URL |
 
 ## 规则转换
 

@@ -140,6 +140,7 @@ func (c *ZipCache) persistToFileLocked() error {
 	if err != nil {
 		return err
 	}
+
 	enc := gob.NewEncoder(file)
 	err = enc.Encode(zipCachePersist{
 		Data:      c.data,
@@ -148,9 +149,11 @@ func (c *ZipCache) persistToFileLocked() error {
 	})
 	closeErr := file.Close()
 	if err != nil {
+		os.Remove(tmpPath) // cleanup on failure
 		return err
 	}
 	if closeErr != nil {
+		os.Remove(tmpPath) // cleanup on failure
 		return closeErr
 	}
 

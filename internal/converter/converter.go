@@ -3,11 +3,7 @@ package converter
 
 import (
 	"archive/zip"
-	"regexp"
 )
-
-// skipPattern matches patterns that result in only wildcards
-var skipPattern = regexp.MustCompile(`^[\?\*]+$`)
 
 // Converter handles rule conversion
 type Converter struct {
