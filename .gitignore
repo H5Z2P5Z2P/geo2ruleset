@@ -1,0 +1,5 @@
+surge-geosite
+data/
+egern-rules/
+*.log
+*.tmp
