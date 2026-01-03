@@ -10,7 +10,6 @@ services:
       - ./data:/data
     restart: unless-stopped
     command:
-      - /app/surge-geosite
       - -port
       - "8080"
       - -zip-ttl
