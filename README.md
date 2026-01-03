@@ -2,6 +2,8 @@
 
 Geosite Ruleset Converter for Surge - Go 实现
 
+本项目重写自 https://github.com/xxxbrian/Surge-Geosite/，感谢原作者的开源贡献。
+
 ## 功能
 
 将 [v2fly/domain-list-community](https://github.com/v2fly/domain-list-community) 的 geosite 数据动态转换为 Surge Ruleset 格式。

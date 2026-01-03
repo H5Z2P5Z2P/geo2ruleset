@@ -1,0 +1,23 @@
+version: "3.8"
+
+services:
+  surge-geosite:
+    build:
+      context: ./go-version
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/data
+    restart: unless-stopped
+    command:
+      - /app/surge-geosite
+      - -port
+      - "8080"
+      - -zip-ttl
+      - 30m
+      - -result-ttl
+      - 24h
+      - -zip-cache-path
+      - /data/zip-cache.gob
+      - -zip-refresh-interval
+      - 30m
