@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
 const (
 	// DefaultBaseURL 是 Komari API 的默认基础 URL
-	DefaultBaseURL = "https://komari.example.com/api"
+	// 留空以强制要求配置
+	DefaultBaseURL = ""
 )
 
 // Client 是 Komari API 客户端
@@ -27,6 +29,12 @@ func NewClient(apiKey string, baseURL string) *Client {
 	if baseURL == "" {
 		baseURL = DefaultBaseURL
 	}
+	// 规范化 BaseURL: 自动追加 /api 后缀
+	baseURL = strings.TrimSuffix(baseURL, "/")
+	if baseURL != "" && !strings.HasSuffix(baseURL, "/api") {
+		baseURL += "/api"
+	}
+
 	return &Client{
 		apiKey:  apiKey,
 		baseURL: baseURL,

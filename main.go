@@ -27,7 +27,7 @@ func main() {
 	zipCachePath := flag.String("zip-cache-path", "", "ZIP cache persistence file path (optional)")
 	refreshInterval := flag.Duration("zip-refresh-interval", 30*time.Minute, "Interval to refresh ZIP cache (0 to disable)")
 	komariAPIKey := flag.String("komari-api-key", envOrDefault("KOMARI_API_KEY", ""), "Komari API key for IP CIDR ruleset")
-	komariBaseURL := flag.String("komari-base-url", envOrDefault("KOMARI_BASE_URL", ""), "Komari API base URL (default: https://komari.example.com/api)")
+	komariBaseURL := flag.String("komari-base-url", envOrDefault("KOMARI_BASE_URL", ""), "Komari API base URL (e.g. https://komari.example.com)")
 	flag.Parse()
 
 	// Initialize caches
