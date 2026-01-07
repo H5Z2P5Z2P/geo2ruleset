@@ -18,35 +18,44 @@ import (
 	"github.com/xxxbrian/surge-geosite/internal/cache"
 	"github.com/xxxbrian/surge-geosite/internal/converter"
 	"github.com/xxxbrian/surge-geosite/internal/fetcher"
+	"github.com/xxxbrian/surge-geosite/internal/komari"
 )
 
 // Server represents the HTTP server
 type Server struct {
-	fetcher     *fetcher.Fetcher
-	resultCache *cache.ResultCache
-	httpClient  *http.Client
-	indexPath   string
-	baseURL     string
-	repoURL     string
-	miscBaseURL string
-	indexMu     sync.RWMutex
-	indexETag   string
-	indexBody   []byte
+	fetcher      *fetcher.Fetcher
+	resultCache  *cache.ResultCache
+	httpClient   *http.Client
+	komariClient *komari.Client
+	indexPath    string
+	baseURL      string
+	repoURL      string
+	miscBaseURL  string
+	indexMu      sync.RWMutex
+	indexETag    string
+	indexBody    []byte
 }
 
 // Config contains server configuration.
 type Config struct {
-	IndexPath   string
-	BaseURL     string
-	RepoURL     string
-	MiscBaseURL string
+	IndexPath     string
+	BaseURL       string
+	RepoURL       string
+	MiscBaseURL   string
+	KomariAPIKey  string
+	KomariBaseURL string
 }
 
 // NewServer creates a new Server
 func NewServer(f *fetcher.Fetcher, rc *cache.ResultCache, cfg Config) *Server {
+	var kc *komari.Client
+	if cfg.KomariAPIKey != "" {
+		kc = komari.NewClient(cfg.KomariAPIKey, cfg.KomariBaseURL)
+	}
 	return &Server{
-		fetcher:     f,
-		resultCache: rc,
+		fetcher:      f,
+		resultCache:  rc,
+		komariClient: kc,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -69,6 +78,12 @@ func (s *Server) SetupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/geosite/egern", s.handleGeositeIndex)
 	mux.HandleFunc("/geosite/egern/", s.handleEgern)
 	mux.HandleFunc("/misc/", s.handleMisc)
+	// Komari IP CIDR 路由
+	mux.HandleFunc("/komari/ipcidr", s.handleKomariIPCIDR)
+	mux.HandleFunc("/komari/ipcidr/", s.handleKomariIPCIDR)
+	mux.HandleFunc("/komari/surge/", s.handleKomariSurge)
+	mux.HandleFunc("/komari/mihomo/", s.handleKomariMihomo)
+	mux.HandleFunc("/komari/egern/", s.handleKomariEgern)
 }
 
 // handleRoot redirects to GitHub repository
@@ -238,6 +253,113 @@ func (s *Server) handleMisc(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "public, max-age=1800")
 	w.Write(body)
+}
+
+// handleKomariIPCIDR 处理 /komari/ipcidr 请求
+// 支持的路径格式：
+// - /komari/ipcidr 或 /komari/ipcidr@DIRECT 或 /komari/ipcidr@PROXY
+func (s *Server) handleKomariIPCIDR(w http.ResponseWriter, r *http.Request) {
+	s.handleKomariRuleset(w, r, "/komari/ipcidr", "surge")
+}
+
+// handleKomariSurge 处理 /komari/surge/{name} 请求
+func (s *Server) handleKomariSurge(w http.ResponseWriter, r *http.Request) {
+	s.handleKomariRuleset(w, r, "/komari/surge/", "surge")
+}
+
+// handleKomariMihomo 处理 /komari/mihomo/{name} 请求
+func (s *Server) handleKomariMihomo(w http.ResponseWriter, r *http.Request) {
+	s.handleKomariRuleset(w, r, "/komari/mihomo/", "mihomo")
+}
+
+// handleKomariEgern 处理 /komari/egern/{name} 请求
+func (s *Server) handleKomariEgern(w http.ResponseWriter, r *http.Request) {
+	s.handleKomariRuleset(w, r, "/komari/egern/", "egern")
+}
+
+// handleKomariRuleset 通用 Komari ruleset 处理函数
+func (s *Server) handleKomariRuleset(w http.ResponseWriter, r *http.Request, prefix string, format string) {
+	if s.komariClient == nil {
+		http.Error(w, "Komari API not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	// 解析路径和过滤器
+	nameWithFilter := strings.TrimPrefix(r.URL.Path, prefix)
+	nameWithFilter = strings.ToLower(strings.TrimSpace(nameWithFilter))
+
+	// 目前只支持 ipcidr
+	var name, filterStr string
+	if strings.Contains(nameWithFilter, "@") {
+		parts := strings.SplitN(nameWithFilter, "@", 2)
+		name = parts[0]
+		filterStr = strings.ToUpper(parts[1])
+	} else {
+		name = nameWithFilter
+	}
+
+	// 如果是 /komari/ipcidr 路径，name 可能为空或包含过滤器
+	if prefix == "/komari/ipcidr" {
+		if name == "" {
+			name = "ipcidr"
+		} else if name != "ipcidr" && !strings.HasPrefix(name, "@") {
+			// /komari/ipcidr@DIRECT 的情况
+			if strings.HasPrefix(nameWithFilter, "@") {
+				filterStr = strings.ToUpper(strings.TrimPrefix(nameWithFilter, "@"))
+				name = "ipcidr"
+			}
+		}
+	}
+
+	// 验证名称
+	if name != "ipcidr" && name != "" {
+		// 其他 ruleset 类型可以在此扩展
+		http.Error(w, "Unknown ruleset: "+name+", available: ipcidr", http.StatusNotFound)
+		return
+	}
+
+	var filter komari.FilterType
+	if filterStr != "" {
+		filter = komari.FilterType(filterStr)
+		if filter != komari.FilterDirect && filter != komari.FilterProxy {
+			http.Error(w, "Invalid filter, use @DIRECT or @PROXY", http.StatusBadRequest)
+			return
+		}
+	}
+
+	// 获取服务器列表
+	clients, err := s.komariClient.GetClients()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to get clients: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// 根据过滤器生成 IP CIDR 规则
+	var getPing func(uuid string) int
+	if filter != "" {
+		getPing = s.komariClient.GetAveragePing
+	}
+	cidrs := komari.GenerateIPCIDR(clients, filter, getPing)
+
+	// 根据格式渲染输出
+	var output string
+	var contentType string
+
+	switch format {
+	case "egern":
+		output = komari.RenderEgern(cidrs)
+		contentType = "text/yaml; charset=utf-8"
+	case "mihomo":
+		output = komari.RenderMihomo(cidrs)
+		contentType = "text/plain; charset=utf-8"
+	default: // surge
+		output = komari.RenderSurge(cidrs)
+		contentType = "text/plain; charset=utf-8"
+	}
+
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Cache-Control", "public, max-age=300")
+	w.Write([]byte(output))
 }
 
 // LoggingMiddleware logs all HTTP requests

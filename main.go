@@ -26,6 +26,8 @@ func main() {
 	resultTTL := flag.Duration("result-ttl", 24*time.Hour, "Result cache TTL")
 	zipCachePath := flag.String("zip-cache-path", "", "ZIP cache persistence file path (optional)")
 	refreshInterval := flag.Duration("zip-refresh-interval", 30*time.Minute, "Interval to refresh ZIP cache (0 to disable)")
+	komariAPIKey := flag.String("komari-api-key", envOrDefault("KOMARI_API_KEY", ""), "Komari API key for IP CIDR ruleset")
+	komariBaseURL := flag.String("komari-base-url", envOrDefault("KOMARI_BASE_URL", ""), "Komari API base URL (default: https://komari.example.com/api)")
 	flag.Parse()
 
 	// Initialize caches
@@ -47,10 +49,12 @@ func main() {
 
 	// Initialize server
 	srv := server.NewServer(f, resultCache, server.Config{
-		IndexPath:   *indexPath,
-		BaseURL:     *baseURL,
-		RepoURL:     *repoURL,
-		MiscBaseURL: *miscBaseURL,
+		IndexPath:     *indexPath,
+		BaseURL:       *baseURL,
+		RepoURL:       *repoURL,
+		MiscBaseURL:   *miscBaseURL,
+		KomariAPIKey:  *komariAPIKey,
+		KomariBaseURL: *komariBaseURL,
 	})
 	if err := srv.RefreshIndex(); err != nil {
 		log.Printf("Index refresh failed: %v", err)
@@ -113,6 +117,9 @@ func main() {
 	}
 	if *refreshInterval > 0 {
 		log.Printf("ZIP refresh interval: %v", *refreshInterval)
+	}
+	if *komariAPIKey != "" {
+		log.Printf("Komari API enabled for IP CIDR ruleset")
 	}
 
 	if err := http.ListenAndServe(addr, handler); err != nil {

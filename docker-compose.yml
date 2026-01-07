@@ -10,6 +10,9 @@ services:
       GEO_BASE_URL: "http://127.0.0.1:8080"
       GEO_REPO_URL: "https://github.com/xxxbrian/Surge-Geosite"
       GEO_MISC_BASE_URL: "https://raw.githubusercontent.com/xxxbrian/Surge-Geosite/refs/heads/main/misc"
+      # Komari 配置
+      KOMARI_API_KEY: "${KOMARI_API_KEY:-}"
+      KOMARI_BASE_URL: "${KOMARI_BASE_URL:-}"
     volumes:
       - ./data:/data
     restart: unless-stopped
@@ -24,3 +27,4 @@ services:
       - /data/zip-cache.gob
       - -zip-refresh-interval
       - 30m
+
