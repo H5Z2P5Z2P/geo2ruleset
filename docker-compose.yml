@@ -13,6 +13,7 @@ services:
       # Komari 配置
       KOMARI_API_KEY: "${KOMARI_API_KEY:-}"
       KOMARI_BASE_URL: "${KOMARI_BASE_URL:-}"
+      KOMARI_PATH_UUID: "${KOMARI_PATH_UUID:-}"
     volumes:
       - ./data:/data
     restart: unless-stopped

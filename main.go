@@ -28,6 +28,7 @@ func main() {
 	refreshInterval := flag.Duration("zip-refresh-interval", 30*time.Minute, "Interval to refresh ZIP cache (0 to disable)")
 	komariAPIKey := flag.String("komari-api-key", envOrDefault("KOMARI_API_KEY", ""), "Komari API key for IP CIDR ruleset")
 	komariBaseURL := flag.String("komari-base-url", envOrDefault("KOMARI_BASE_URL", ""), "Komari API base URL (e.g. https://komari.example.com)")
+	komariPathUUID := flag.String("komari-path-uuid", envOrDefault("KOMARI_PATH_UUID", ""), "Optional UUID prefix for Komari path (e.g. 550e8400-e29b-41d4-a716-446655440000)")
 	flag.Parse()
 
 	// Initialize caches
@@ -49,12 +50,13 @@ func main() {
 
 	// Initialize server
 	srv := server.NewServer(f, resultCache, server.Config{
-		IndexPath:     *indexPath,
-		BaseURL:       *baseURL,
-		RepoURL:       *repoURL,
-		MiscBaseURL:   *miscBaseURL,
-		KomariAPIKey:  *komariAPIKey,
-		KomariBaseURL: *komariBaseURL,
+		IndexPath:      *indexPath,
+		BaseURL:        *baseURL,
+		RepoURL:        *repoURL,
+		MiscBaseURL:    *miscBaseURL,
+		KomariAPIKey:   *komariAPIKey,
+		KomariBaseURL:  *komariBaseURL,
+		KomariPathUUID: *komariPathUUID,
 	})
 	if err := srv.RefreshIndex(); err != nil {
 		log.Printf("Index refresh failed: %v", err)

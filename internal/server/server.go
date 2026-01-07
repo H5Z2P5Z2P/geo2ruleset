@@ -27,6 +27,7 @@ type Server struct {
 	resultCache  *cache.ResultCache
 	httpClient   *http.Client
 	komariClient *komari.Client
+	komariPrefix string
 	indexPath    string
 	baseURL      string
 	repoURL      string
@@ -38,12 +39,13 @@ type Server struct {
 
 // Config contains server configuration.
 type Config struct {
-	IndexPath     string
-	BaseURL       string
-	RepoURL       string
-	MiscBaseURL   string
-	KomariAPIKey  string
-	KomariBaseURL string
+	IndexPath      string
+	BaseURL        string
+	RepoURL        string
+	MiscBaseURL    string
+	KomariAPIKey   string
+	KomariBaseURL  string
+	KomariPathUUID string
 }
 
 // NewServer creates a new Server
@@ -52,10 +54,20 @@ func NewServer(f *fetcher.Fetcher, rc *cache.ResultCache, cfg Config) *Server {
 	if cfg.KomariAPIKey != "" {
 		kc = komari.NewClient(cfg.KomariAPIKey, cfg.KomariBaseURL)
 	}
+
+	// 确定 Komari 路径前缀
+	prefix := "/komari"
+	if cfg.KomariPathUUID != "" {
+		// 确保 UUID 前后没有斜杠，但路径前有斜杠
+		uuid := strings.Trim(cfg.KomariPathUUID, "/")
+		prefix = "/" + uuid + "/komari"
+	}
+
 	return &Server{
 		fetcher:      f,
 		resultCache:  rc,
 		komariClient: kc,
+		komariPrefix: prefix,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -79,11 +91,12 @@ func (s *Server) SetupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/geosite/egern/", s.handleEgern)
 	mux.HandleFunc("/misc/", s.handleMisc)
 	// Komari IP CIDR 路由
-	mux.HandleFunc("/komari/ipcidr", s.handleKomariIPCIDR)
-	mux.HandleFunc("/komari/ipcidr/", s.handleKomariIPCIDR)
-	mux.HandleFunc("/komari/surge/", s.handleKomariSurge)
-	mux.HandleFunc("/komari/mihomo/", s.handleKomariMihomo)
-	mux.HandleFunc("/komari/egern/", s.handleKomariEgern)
+	// 使用动态前缀注册路由
+	mux.HandleFunc(s.komariPrefix+"/ipcidr", s.handleKomariIPCIDR)
+	mux.HandleFunc(s.komariPrefix+"/ipcidr/", s.handleKomariIPCIDR)
+	mux.HandleFunc(s.komariPrefix+"/surge/", s.handleKomariSurge)
+	mux.HandleFunc(s.komariPrefix+"/mihomo/", s.handleKomariMihomo)
+	mux.HandleFunc(s.komariPrefix+"/egern/", s.handleKomariEgern)
 }
 
 // handleRoot redirects to GitHub repository
@@ -255,26 +268,26 @@ func (s *Server) handleMisc(w http.ResponseWriter, r *http.Request) {
 	w.Write(body)
 }
 
-// handleKomariIPCIDR 处理 /komari/ipcidr 请求
+// handleKomariIPCIDR 处理 IP CIDR 请求
 // 支持的路径格式：
-// - /komari/ipcidr 或 /komari/ipcidr@DIRECT 或 /komari/ipcidr@PROXY
+// - {prefix}/ipcidr 或 {prefix}/ipcidr@DIRECT 或 {prefix}/ipcidr@PROXY
 func (s *Server) handleKomariIPCIDR(w http.ResponseWriter, r *http.Request) {
-	s.handleKomariRuleset(w, r, "/komari/ipcidr", "surge")
+	s.handleKomariRuleset(w, r, s.komariPrefix+"/ipcidr", "surge")
 }
 
-// handleKomariSurge 处理 /komari/surge/{name} 请求
+// handleKomariSurge 处理 Surge 请求
 func (s *Server) handleKomariSurge(w http.ResponseWriter, r *http.Request) {
-	s.handleKomariRuleset(w, r, "/komari/surge/", "surge")
+	s.handleKomariRuleset(w, r, s.komariPrefix+"/surge/", "surge")
 }
 
-// handleKomariMihomo 处理 /komari/mihomo/{name} 请求
+// handleKomariMihomo 处理 Mihomo 请求
 func (s *Server) handleKomariMihomo(w http.ResponseWriter, r *http.Request) {
-	s.handleKomariRuleset(w, r, "/komari/mihomo/", "mihomo")
+	s.handleKomariRuleset(w, r, s.komariPrefix+"/mihomo/", "mihomo")
 }
 
-// handleKomariEgern 处理 /komari/egern/{name} 请求
+// handleKomariEgern 处理 Egern 请求
 func (s *Server) handleKomariEgern(w http.ResponseWriter, r *http.Request) {
-	s.handleKomariRuleset(w, r, "/komari/egern/", "egern")
+	s.handleKomariRuleset(w, r, s.komariPrefix+"/egern/", "egern")
 }
 
 // handleKomariRuleset 通用 Komari ruleset 处理函数
@@ -298,8 +311,8 @@ func (s *Server) handleKomariRuleset(w http.ResponseWriter, r *http.Request, pre
 		name = nameWithFilter
 	}
 
-	// 如果是 /komari/ipcidr 路径，name 可能为空或包含过滤器
-	if prefix == "/komari/ipcidr" {
+	// 如果是 ipcidr 路径，name 可能为空或包含过滤器
+	if strings.HasSuffix(prefix, "/ipcidr") {
 		if name == "" {
 			name = "ipcidr"
 		} else if name != "ipcidr" && !strings.HasPrefix(name, "@") {
