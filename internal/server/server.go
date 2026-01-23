@@ -18,15 +18,18 @@ import (
 	"github.com/xxxbrian/surge-geosite/internal/cache"
 	"github.com/xxxbrian/surge-geosite/internal/converter"
 	"github.com/xxxbrian/surge-geosite/internal/fetcher"
+	"github.com/xxxbrian/surge-geosite/internal/geoip"
 	"github.com/xxxbrian/surge-geosite/internal/komari"
 )
 
 // Server represents the HTTP server
 type Server struct {
 	fetcher      *fetcher.Fetcher
+	geoIPFetcher *fetcher.GeoIPFetcher
 	resultCache  *cache.ResultCache
 	httpClient   *http.Client
 	komariClient *komari.Client
+	geoIP        *geoip.GeoIP
 	komariPrefix string
 	indexPath    string
 	baseURL      string
@@ -49,7 +52,7 @@ type Config struct {
 }
 
 // NewServer creates a new Server
-func NewServer(f *fetcher.Fetcher, rc *cache.ResultCache, cfg Config) *Server {
+func NewServer(f *fetcher.Fetcher, gf *fetcher.GeoIPFetcher, rc *cache.ResultCache, cfg Config) *Server {
 	var kc *komari.Client
 	if cfg.KomariAPIKey != "" {
 		kc = komari.NewClient(cfg.KomariAPIKey, cfg.KomariBaseURL)
@@ -65,8 +68,10 @@ func NewServer(f *fetcher.Fetcher, rc *cache.ResultCache, cfg Config) *Server {
 
 	return &Server{
 		fetcher:      f,
+		geoIPFetcher: gf,
 		resultCache:  rc,
 		komariClient: kc,
+		geoIP:        geoip.NewGeoIP(),
 		komariPrefix: prefix,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
@@ -90,6 +95,13 @@ func (s *Server) SetupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/geosite/egern", s.handleGeositeIndex)
 	mux.HandleFunc("/geosite/egern/", s.handleEgern)
 	mux.HandleFunc("/misc/", s.handleMisc)
+
+	// GeoIP routes
+	mux.HandleFunc("/geoip/", s.handleGeoIP)
+	mux.HandleFunc("/geoip/surge/", s.handleGeoIPSurge)
+	mux.HandleFunc("/geoip/mihomo/", s.handleGeoIPMihomo)
+	mux.HandleFunc("/geoip/egern/", s.handleGeoIPEgern)
+
 	// Komari IP CIDR 路由
 	// 使用动态前缀注册路由
 	mux.HandleFunc(s.komariPrefix+"/ipcidr", s.handleKomariIPCIDR)
@@ -555,4 +567,79 @@ func (s *Server) saveIndexToFile(body []byte) error {
 	}
 
 	return os.Rename(tmpPath, s.indexPath)
+}
+
+// RefreshGeoIP downloads and reloads the GeoIP DB
+func (s *Server) RefreshGeoIP() error {
+	data, err := s.geoIPFetcher.GetDB()
+	if err != nil {
+		return err
+	}
+	return s.geoIP.Load(data)
+}
+
+func (s *Server) handleGeoIP(w http.ResponseWriter, r *http.Request) {
+	s.serveGeoIP(w, r, "/geoip/", "list")
+}
+
+func (s *Server) handleGeoIPSurge(w http.ResponseWriter, r *http.Request) {
+	s.serveGeoIP(w, r, "/geoip/surge/", "surge")
+}
+
+func (s *Server) handleGeoIPMihomo(w http.ResponseWriter, r *http.Request) {
+	s.serveGeoIP(w, r, "/geoip/mihomo/", "mihomo")
+}
+
+func (s *Server) handleGeoIPEgern(w http.ResponseWriter, r *http.Request) {
+	s.serveGeoIP(w, r, "/geoip/egern/", "egern")
+}
+
+func (s *Server) serveGeoIP(w http.ResponseWriter, r *http.Request, prefix string, format string) {
+	code := strings.TrimPrefix(r.URL.Path, prefix)
+	code = strings.TrimSpace(code)
+	if code == "" {
+		http.Error(w, "Invalid code parameter", http.StatusBadRequest)
+		return
+	}
+
+	cidrs, ok := s.geoIP.GetCIDRs(code)
+	if !ok {
+		// Try to refresh once if not found, in case of startup failure or update
+		// But don't do it on every request to avoid DDoS.
+		// For now, assume if it's not found, it's not found.
+		http.Error(w, "GeoIP code not found: "+code, http.StatusNotFound)
+		return
+	}
+
+	var output string
+	var contentType string
+
+	switch format {
+	case "egern":
+		output = komari.RenderEgern(convertToIPCIDR(cidrs))
+		contentType = "text/yaml; charset=utf-8"
+	case "mihomo", "surge":
+		output = komari.RenderSurge(convertToIPCIDR(cidrs))
+		contentType = "text/plain; charset=utf-8"
+	default:
+		// Plain list
+		output = strings.Join(cidrs, "\n")
+		contentType = "text/plain; charset=utf-8"
+	}
+
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+	w.Write([]byte(output))
+}
+
+func convertToIPCIDR(cidrs []string) []komari.IPCIDR {
+	var result []komari.IPCIDR
+	for _, ip := range cidrs {
+		isIPv6 := strings.Contains(ip, ":")
+		result = append(result, komari.IPCIDR{
+			IP:     ip,
+			IsIPv6: isIPv6,
+		})
+	}
+	return result
 }

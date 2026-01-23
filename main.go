@@ -29,6 +29,7 @@ func main() {
 	komariAPIKey := flag.String("komari-api-key", envOrDefault("KOMARI_API_KEY", ""), "Komari API key for IP CIDR ruleset")
 	komariBaseURL := flag.String("komari-base-url", envOrDefault("KOMARI_BASE_URL", ""), "Komari API base URL (e.g. https://komari.example.com)")
 	komariPathUUID := flag.String("komari-path-uuid", envOrDefault("KOMARI_PATH_UUID", ""), "Optional UUID prefix for Komari path (e.g. 550e8400-e29b-41d4-a716-446655440000)")
+	geoipURL := flag.String("geoip-url", envOrDefault("GEO_DB_URL", ""), "MaxMind GeoIP DB download URL")
 	flag.Parse()
 
 	// Initialize caches
@@ -47,9 +48,10 @@ func main() {
 
 	// Initialize fetcher
 	f := fetcher.NewFetcher(zipCache)
+	gf := fetcher.NewGeoIPFetcher(*geoipURL)
 
 	// Initialize server
-	srv := server.NewServer(f, resultCache, server.Config{
+	srv := server.NewServer(f, gf, resultCache, server.Config{
 		IndexPath:      *indexPath,
 		BaseURL:        *baseURL,
 		RepoURL:        *repoURL,
@@ -60,6 +62,9 @@ func main() {
 	})
 	if err := srv.RefreshIndex(); err != nil {
 		log.Printf("Index refresh failed: %v", err)
+	}
+	if err := srv.RefreshGeoIP(); err != nil {
+		log.Printf("GeoIP refresh failed: %v", err)
 	}
 
 	// Setup routes
@@ -103,6 +108,19 @@ func main() {
 			}
 		}()
 	}
+
+	// Start GeoIP refresh goroutine (every 24 hours)
+	go func() {
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+		for range ticker.C {
+			if err := srv.RefreshGeoIP(); err != nil {
+				log.Printf("GeoIP refresh failed: %v", err)
+			} else {
+				log.Printf("GeoIP refreshed")
+			}
+		}
+	}()
 
 	// Start server
 	addr := ":" + *port

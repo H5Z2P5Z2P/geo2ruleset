@@ -14,6 +14,8 @@ services:
       KOMARI_API_KEY: "${KOMARI_API_KEY:-}"
       KOMARI_BASE_URL: "${KOMARI_BASE_URL:-}"
       KOMARI_PATH_UUID: "${KOMARI_PATH_UUID:-}"
+      # GeoIP 配置
+      GEO_DB_URL: "${GEO_DB_URL:-}"
     volumes:
       - ./data:/data
     restart: unless-stopped
